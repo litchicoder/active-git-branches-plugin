@@ -8,5 +8,5 @@ on:
 
 jobs:
   cd:
-    uses: jenkins-infra/github-reusable-workflows/.github/workflows/maven-cd.yaml@v0
+    uses: jenkins-infra/github-reusable-workflows/.github/workflows/maven-cd.yaml@v1
     secrets: inherit
