@@ -15,7 +15,7 @@
     <packaging>hpi</packaging>
 
     <name>Active Git Branches Parameter</name>
-    <url>https://github.com/jenkinsci/active-git-branches-plugin</url>
+    <url>https://github.com/litchicoder/active-git-branches-plugin</url>
 
     <licenses>
         <license>
