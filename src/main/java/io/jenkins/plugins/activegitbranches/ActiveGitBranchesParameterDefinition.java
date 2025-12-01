@@ -207,7 +207,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                                     org.eclipse.jgit.revwalk.RevCommit commit = walk.parseCommit(ref.getObjectId());
                                     long commitTime = commit.getCommitTime() * 1000L;
                                     branchInfos.add(new BranchInfo(branchName, commitTime));
-                                } catch (Exception e) {
+                                } catch (IOException e) {
                                     // If we can't parse commit, treat as old
                                     branchInfos.add(new BranchInfo(branchName, 0L));
                                 }
@@ -229,28 +229,6 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         if (branchInfos.size() > maxBranchCount) {
             if (alwaysIncludeBranches == null || alwaysIncludeBranches.trim().isEmpty()) {
                 return branchInfos.subList(0, maxBranchCount);
-            }
-            
-            List<BranchInfo> limitedList = new ArrayList<>();
-            int count = 0;
-            
-            // First pass: add all branches that fit in the limit
-            for (BranchInfo info : branchInfos) {
-                boolean isAlwaysIncluded = matchesAlwaysInclude(info.getName());
-                
-                if (count < maxBranchCount || isAlwaysIncluded) {
-                    limitedList.add(info);
-                    if (!isAlwaysIncluded) {
-                        count++; // Only count towards limit if NOT always included
-                        // Wait, if we don't count always included branches, we might end up with many branches.
-                        // Alternative strategy: Always included branches take priority, then fill up to maxBranchCount with others.
-                    } else {
-                         // If it IS always included, we add it. Does it consume a slot?
-                         // The requirement: "符合正则的分支不是最近活跃的分支也可以展示选项"
-                         // It implies they should be added EVEN IF they would fall out of the Top N.
-                         // So they are exceptions to the limit.
-                    }
-                }
             }
             
             // Let's refine the logic:
@@ -338,25 +316,28 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     }
 
     private File createTempDirectory() throws IOException {
-        File tempDir = File.createTempFile("jenkins-git-branches-", "");
-        tempDir.delete();
-        tempDir.mkdirs();
-        return tempDir;
+        return java.nio.file.Files.createTempDirectory("jenkins-git-branches-").toFile();
     }
 
     private void deleteDirectory(File directory) {
         if (directory != null && directory.exists()) {
-            File[] files = directory.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isDirectory()) {
-                        deleteDirectory(file);
-                    } else {
-                        file.delete();
+            try {
+                java.nio.file.Files.walkFileTree(directory.toPath(), new java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                    @Override
+                    public java.nio.file.FileVisitResult visitFile(java.nio.file.Path file, java.nio.file.attribute.BasicFileAttributes attrs) throws IOException {
+                        java.nio.file.Files.delete(file);
+                        return java.nio.file.FileVisitResult.CONTINUE;
                     }
-                }
+
+                    @Override
+                    public java.nio.file.FileVisitResult postVisitDirectory(java.nio.file.Path dir, IOException exc) throws IOException {
+                        java.nio.file.Files.delete(dir);
+                        return java.nio.file.FileVisitResult.CONTINUE;
+                    }
+                });
+            } catch (IOException e) {
+                LOGGER.log(Level.WARNING, "Failed to delete temp directory: " + directory, e);
             }
-            directory.delete();
         }
     }
 
