@@ -1,0 +1,43 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:d="jelly:define" 
+         xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form" xmlns:c="/lib/credentials">
+
+    <f:entry title="${%Name}" field="name">
+        <f:textbox />
+    </f:entry>
+
+    <f:entry title="${%Description}" field="description">
+        <f:textarea />
+    </f:entry>
+
+    <f:entry title="${%Git Repository URL}" field="repositoryUrl">
+        <f:textbox />
+    </f:entry>
+
+    <f:entry title="${%Credentials}" field="credentialsId">
+        <c:select />
+    </f:entry>
+
+    <f:entry title="${%Max Branch Count}" field="maxBranchCount">
+        <f:number default="10" min="1" max="100" />
+    </f:entry>
+
+    <f:entry title="${%Branch Filter (Regex)}" field="branchFilter">
+        <f:textbox />
+    </f:entry>
+    
+    <f:entry title="${%Always Include Branches (Regex)}" field="alwaysIncludeBranches">
+        <f:textbox />
+    </f:entry>
+
+    <f:entry title="${%Default Value}" field="defaultValue">
+        <f:select />
+    </f:entry>
+
+    <f:entry title="">
+        <f:validateButton title="${%Test Connection}" progress="${%Testing...}"
+                          method="testConnection" 
+                          with="repositoryUrl,credentialsId,maxBranchCount,branchFilter,alwaysIncludeBranches" />
+    </f:entry>
+
+</j:jelly>

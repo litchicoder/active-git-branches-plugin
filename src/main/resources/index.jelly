@@ -1,0 +1,12 @@
+<?jelly escape-by-default='true'?>
+<div>
+    A Jenkins parameter plugin that dynamically fetches and displays the most recent 
+    active Git branches sorted by commit date. Features include:
+    <ul>
+        <li>Dynamic branch fetching from Git repositories</li>
+        <li>Branches sorted by commit date (most recent first)</li>
+        <li>Configurable maximum branch count (Top N)</li>
+        <li>Regex-based branch filtering</li>
+        <li>Credentials support for private repositories</li>
+    </ul>
+</div>

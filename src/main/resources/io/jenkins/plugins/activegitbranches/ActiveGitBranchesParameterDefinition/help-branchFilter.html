@@ -1,0 +1,13 @@
+<div>
+    <p>A regular expression pattern to filter branch names.</p>
+    <p>Only branches that <strong>match</strong> the pattern will be included in the list.</p>
+    <p>Examples:</p>
+    <ul>
+        <li><code>.*</code> - Match all branches (default)</li>
+        <li><code>feature/.*</code> - Only feature branches</li>
+        <li><code>release/.*</code> - Only release branches</li>
+        <li><code>(main|master|develop)</code> - Only main, master, or develop</li>
+        <li><code>(?!release/).*</code> - All branches except release branches</li>
+    </ul>
+    <p>Leave empty to include all branches.</p>
+</div>

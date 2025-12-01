@@ -1,0 +1,13 @@
+<div>
+    <p>
+        A regular expression pattern for branches that should <b>always be included</b> in the list, 
+        regardless of the commit date or the "Max Branch Count" limit.
+    </p>
+    <p>
+        These branches will still be subject to the "Branch Filter" if configured, or you can choose to make them bypass it based on implementation preferences (Current design: They bypass the Top N limit, but must still be valid branches).
+    </p>
+    <p>
+        Useful for keeping main branches like <code>master</code>, <code>main</code>, or <code>develop</code> always visible.
+    </p>
+    <p>Example: <code>^(main|master|develop)$</code></p>
+</div>
