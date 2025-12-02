@@ -30,6 +30,10 @@
         <f:textbox />
     </f:entry>
 
+    <f:entry title="${%Use Quick Fetch}" field="useQuickFetch">
+        <f:checkbox default="true" />
+    </f:entry>
+
     <f:entry title="${%Default Value}" field="defaultValue">
         <f:select />
     </f:entry>

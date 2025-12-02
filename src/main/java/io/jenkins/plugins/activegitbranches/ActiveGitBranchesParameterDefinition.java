@@ -7,7 +7,10 @@ import com.cloudbees.plugins.credentials.common.StandardUsernameCredentials;
 import com.cloudbees.plugins.credentials.domains.URIRequirementBuilder;
 import edu.umd.cs.findbugs.annotations.NonNull;
 import hudson.Extension;
+import hudson.FilePath;
+import hudson.model.AbstractProject;
 import hudson.model.Item;
+import hudson.model.Job;
 import hudson.model.ParameterDefinition;
 import hudson.model.ParameterValue;
 import hudson.security.ACL;
@@ -26,11 +29,13 @@ import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
+import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
+import java.util.Collections;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -53,6 +58,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     private String branchFilter;
     private String alwaysIncludeBranches;
     private String defaultValue;
+    private boolean useQuickFetch = true;
 
     @DataBoundConstructor
     public ActiveGitBranchesParameterDefinition(String name, String repositoryUrl, int maxBranchCount, String description) {
@@ -105,6 +111,15 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         this.defaultValue = defaultValue;
     }
 
+    public boolean isUseQuickFetch() {
+        return useQuickFetch;
+    }
+
+    @DataBoundSetter
+    public void setUseQuickFetch(boolean useQuickFetch) {
+        this.useQuickFetch = useQuickFetch;
+    }
+
     @Override
     public ParameterValue createValue(StaplerRequest req, JSONObject jo) {
         String value = jo.getString("value");
@@ -145,18 +160,218 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
 
     /**
      * Fetches branches from the remote Git repository.
-     * This method throws exceptions on failure.
+     * Strategy:
+     * 1. Try workspace fetch + for-each-ref (fast + time-sorted) - PREFERRED
+     * 2. If no workspace: use ls-remote (fast, alphabetical) or clone (slow, time-sorted)
      */
     private List<BranchInfo> fetchBranchesInternal() throws IOException, InterruptedException {
-        final List<BranchInfo> branchInfos = new ArrayList<>();
-        
         if (repositoryUrl == null || repositoryUrl.isEmpty()) {
             throw new IOException("Repository URL is not configured");
         }
 
-        StandardCredentials credentials = getCredentials();
+        // First, always try workspace-based fetch (fast + preserves time sorting)
+        List<BranchInfo> result = tryFetchFromWorkspace();
+        if (result != null) {
+            LOGGER.info("Fetched branches from workspace with time-based sorting");
+            return result;
+        }
+
+        // No workspace available, fall back based on useQuickFetch setting
+        if (useQuickFetch) {
+            // Fast but no time sorting
+            LOGGER.info("No workspace available, using ls-remote (alphabetical sort)");
+            return fetchBranchesQuick();
+        } else {
+            // Slow but preserves time sorting
+            LOGGER.info("No workspace available, using clone (time-based sort)");
+            return fetchBranchesWithFullClone();
+        }
+    }
+
+    /**
+     * Quick fetch using git ls-remote (no clone required).
+     * This is much faster but doesn't provide commit timestamps for sorting.
+     * Branches are sorted alphabetically instead.
+     */
+    private List<BranchInfo> fetchBranchesQuick() throws IOException, InterruptedException {
+        final List<BranchInfo> branchInfos = new ArrayList<>();
         
-        // Create a temp directory for the clone
+        StandardCredentials credentials = getCredentials();
+        File tempDir = createTempDirectory();
+        
+        try {
+            TaskListener listener = new LogTaskListener(LOGGER, Level.INFO);
+            EnvVars env = new EnvVars();
+            
+            GitClient git = Git.with(listener, env)
+                    .in(tempDir)
+                    .using("jgit")
+                    .getClient();
+            
+            if (credentials != null) {
+                git.addCredentials(repositoryUrl, credentials);
+            }
+
+            // Use ls-remote to get remote references without cloning
+            Map<String, org.eclipse.jgit.lib.ObjectId> remoteRefs = git.getRemoteReferences(
+                    repositoryUrl, null, true, false);
+            
+            for (Map.Entry<String, org.eclipse.jgit.lib.ObjectId> entry : remoteRefs.entrySet()) {
+                String refName = entry.getKey();
+                
+                // Filter for branches (refs/heads/...)
+                if (refName.startsWith("refs/heads/")) {
+                    String branchName = refName.substring("refs/heads/".length());
+                    
+                    // Apply branch filter
+                    boolean isAlwaysIncluded = matchesAlwaysInclude(branchName);
+                    
+                    if (!isAlwaysIncluded && !matchesBranchFilter(branchName)) {
+                        continue;
+                    }
+                    
+                    // Use 0 as commit time since ls-remote doesn't provide it
+                    // Branches will be sorted alphabetically instead
+                    branchInfos.add(new BranchInfo(branchName, 0L));
+                }
+            }
+        } finally {
+            deleteDirectory(tempDir);
+        }
+
+        // Sort alphabetically (since we don't have commit times)
+        branchInfos.sort((a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+        
+        return applyLimits(branchInfos);
+    }
+
+    /**
+     * Try to fetch branches from existing Job workspace.
+     * Uses git fetch + for-each-ref which is faster than cloning.
+     * Returns null if workspace is not available.
+     */
+    private List<BranchInfo> tryFetchFromWorkspace() {
+        try {
+            // Get the current Job from Stapler request context
+            StaplerRequest request = Stapler.getCurrentRequest();
+            if (request == null) {
+                LOGGER.fine("No Stapler request context available");
+                return null;
+            }
+            
+            Job<?, ?> job = request.findAncestorObject(Job.class);
+            if (job == null) {
+                LOGGER.fine("No Job found in request context");
+                return null;
+            }
+            
+            // Get workspace
+            FilePath workspace = null;
+            if (job instanceof AbstractProject) {
+                workspace = ((AbstractProject<?, ?>) job).getSomeWorkspace();
+            }
+            
+            if (workspace == null || !workspace.exists()) {
+                LOGGER.fine("Workspace not available for job: " + job.getFullName());
+                return null;
+            }
+            
+            // Check if .git directory exists
+            FilePath gitDir = workspace.child(".git");
+            if (!gitDir.exists()) {
+                LOGGER.fine("No .git directory in workspace: " + workspace.getRemote());
+                return null;
+            }
+            
+            LOGGER.info("Using existing workspace for branch fetch: " + workspace.getRemote());
+            return fetchBranchesFromWorkspace(workspace);
+            
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Failed to fetch from workspace, will fall back to clone", e);
+            return null;
+        }
+    }
+
+    /**
+     * Fetch branches from an existing workspace by reading local refs only.
+     * No network operation - instant response.
+     * Returns null if no local refs found (caller should fall back to other methods).
+     */
+    private List<BranchInfo> fetchBranchesFromWorkspace(FilePath workspace) throws IOException, InterruptedException {
+        File workspaceDir = new File(workspace.getRemote());
+        
+        TaskListener listener = new LogTaskListener(LOGGER, Level.INFO);
+        EnvVars env = new EnvVars();
+        
+        GitClient git = Git.with(listener, env)
+                .in(workspaceDir)
+                .using("jgit")
+                .getClient();
+        
+        // Only read existing local refs (instant, no network)
+        List<BranchInfo> localRefs = readLocalRefs(git);
+        if (!localRefs.isEmpty()) {
+            LOGGER.info("Using cached local refs (" + localRefs.size() + " branches)");
+            return applyLimits(localRefs);
+        }
+        
+        // No local refs found, return null to fall back to other methods
+        LOGGER.info("No local refs found in workspace, will use fallback method");
+        return null;
+    }
+
+    /**
+     * Read local refs from the repository without any network operation.
+     * Returns empty list if no refs found or repository is invalid.
+     */
+    private List<BranchInfo> readLocalRefs(GitClient git) {
+        final List<BranchInfo> branchInfos = new ArrayList<>();
+        
+        try {
+            git.withRepository(new RepositoryCallback<Void>() {
+                @Override
+                public Void invoke(org.eclipse.jgit.lib.Repository repo, hudson.remoting.VirtualChannel channel) throws IOException {
+                    try (org.eclipse.jgit.revwalk.RevWalk walk = new org.eclipse.jgit.revwalk.RevWalk(repo)) {
+                        List<org.eclipse.jgit.lib.Ref> allRefs = repo.getRefDatabase().getRefsByPrefix("refs/remotes/origin/");
+                        for (org.eclipse.jgit.lib.Ref ref : allRefs) {
+                            String branchName = ref.getName().substring("refs/remotes/origin/".length());
+                            
+                            if (branchName.equals("HEAD")) continue;
+                            
+                            boolean isAlwaysIncluded = matchesAlwaysInclude(branchName);
+                            if (!isAlwaysIncluded && !matchesBranchFilter(branchName)) {
+                                continue;
+                            }
+                            
+                            try {
+                                org.eclipse.jgit.revwalk.RevCommit commit = walk.parseCommit(ref.getObjectId());
+                                long commitTime = commit.getCommitTime() * 1000L;
+                                branchInfos.add(new BranchInfo(branchName, commitTime));
+                            } catch (Exception e) {
+                                branchInfos.add(new BranchInfo(branchName, 0L));
+                            }
+                        }
+                    }
+                    return null;
+                }
+            });
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Failed to read local refs", e);
+            return new ArrayList<>();
+        }
+        
+        // Sort by commit date descending
+        branchInfos.sort((a, b) -> Long.compare(b.getCommitTime(), a.getCommitTime()));
+        return branchInfos;
+    }
+
+    /**
+     * Full clone to get commit timestamps (slowest but always works).
+     */
+    private List<BranchInfo> fetchBranchesWithFullClone() throws IOException, InterruptedException {
+        final List<BranchInfo> branchInfos = new ArrayList<>();
+        
+        StandardCredentials credentials = getCredentials();
         File tempDir = createTempDirectory();
         
         try {
@@ -196,7 +411,6 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                                 if (branchName.equals("HEAD")) continue;
                                 
                                 // Apply branch filter
-                                // If alwaysIncludeBranches is set and matches, we keep it regardless of branchFilter
                                 boolean isAlwaysIncluded = matchesAlwaysInclude(branchName);
                                 
                                 if (!isAlwaysIncluded && !matchesBranchFilter(branchName)) {
@@ -224,74 +438,44 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
 
         // Sort by commit date descending
         branchInfos.sort((a, b) -> Long.compare(b.getCommitTime(), a.getCommitTime()));
+        
+        return applyLimits(branchInfos);
+    }
 
-        // Limit to maxBranchCount, but keep all always-included branches
-        if (branchInfos.size() > maxBranchCount) {
-            if (alwaysIncludeBranches == null || alwaysIncludeBranches.trim().isEmpty()) {
-                return branchInfos.subList(0, maxBranchCount);
-            }
-            
-            List<BranchInfo> limitedList = new ArrayList<>();
-            int count = 0;
-            
-            // First pass: add all branches that fit in the limit
-            for (BranchInfo info : branchInfos) {
-                boolean isAlwaysIncluded = matchesAlwaysInclude(info.getName());
-                
-                if (count < maxBranchCount || isAlwaysIncluded) {
-                    limitedList.add(info);
-                    if (!isAlwaysIncluded) {
-                        count++; // Only count towards limit if NOT always included
-                        // Wait, if we don't count always included branches, we might end up with many branches.
-                        // Alternative strategy: Always included branches take priority, then fill up to maxBranchCount with others.
-                    } else {
-                         // If it IS always included, we add it. Does it consume a slot?
-                         // The requirement: "符合正则的分支不是最近活跃的分支也可以展示选项"
-                         // It implies they should be added EVEN IF they would fall out of the Top N.
-                         // So they are exceptions to the limit.
-                    }
-                }
-            }
-            
-            // Let's refine the logic:
-            // 1. Identify branches that MUST be included.
-            // 2. Identify other branches that are candidates.
-            // 3. Take all mandatory branches.
-            // 4. Fill the remaining slots (up to maxBranchCount) with the best candidates.
-            // 5. If mandatory branches already exceed maxBranchCount, we keep them all (and maybe no others).
-            
-            // Wait, "maxBranchCount" usually implies total display count.
-            // If I have 5 important branches and max=10, I show 5 important + 5 recent.
-            // If I have 15 important branches and max=10, I show 15 important? Or 10 important?
-            // Usually "Always Include" implies "Don't drop this". So I show 15.
-            
-            List<BranchInfo> mandatory = new ArrayList<>();
-            List<BranchInfo> others = new ArrayList<>();
-            
-            for (BranchInfo info : branchInfos) {
-                if (matchesAlwaysInclude(info.getName())) {
-                    mandatory.add(info);
-                } else {
-                    others.add(info);
-                }
-            }
-            
-            List<BranchInfo> result = new ArrayList<>(mandatory);
-            
-            // Fill remaining slots with others
-            int slotsLeft = maxBranchCount - mandatory.size();
-            if (slotsLeft > 0) {
-                for (int i = 0; i < slotsLeft && i < others.size(); i++) {
-                    result.add(others.get(i));
-                }
-            }
-            
-            // Re-sort by time
-            result.sort((a, b) -> Long.compare(b.getCommitTime(), a.getCommitTime()));
-            return result;
+    /**
+     * Apply maxBranchCount limit while respecting alwaysIncludeBranches.
+     */
+    private List<BranchInfo> applyLimits(List<BranchInfo> branchInfos) {
+        if (branchInfos.size() <= maxBranchCount) {
+            return branchInfos;
         }
 
-        return branchInfos;
+        if (alwaysIncludeBranches == null || alwaysIncludeBranches.trim().isEmpty()) {
+            return new ArrayList<>(branchInfos.subList(0, maxBranchCount));
+        }
+
+        List<BranchInfo> mandatory = new ArrayList<>();
+        List<BranchInfo> others = new ArrayList<>();
+
+        for (BranchInfo info : branchInfos) {
+            if (matchesAlwaysInclude(info.getName())) {
+                mandatory.add(info);
+            } else {
+                others.add(info);
+            }
+        }
+
+        List<BranchInfo> result = new ArrayList<>(mandatory);
+
+        // Fill remaining slots with others
+        int slotsLeft = maxBranchCount - mandatory.size();
+        if (slotsLeft > 0) {
+            for (int i = 0; i < slotsLeft && i < others.size(); i++) {
+                result.add(others.get(i));
+            }
+        }
+
+        return result;
     }
     
     private boolean matchesAlwaysInclude(String branchName) {

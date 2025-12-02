@@ -1,0 +1,16 @@
+<div>
+  <p>Controls the fallback behavior when no workspace is available.</p>
+  <p><strong>Fetch Strategy (in order of preference):</strong></p>
+  <ol>
+    <li><strong>Local refs</strong> (instant): Reads cached refs from existing <code>.git</code> directory. 
+        No network required, instant response, time-sorted.</li>
+    <li><strong>Workspace fetch</strong>: If no local refs, fetches from remote with 30s timeout.</li>
+    <li><strong>Fallback</strong> (when no workspace):
+      <ul>
+        <li><strong>Enabled (default):</strong> Uses <code>ls-remote</code>. Very fast (~1s), alphabetical sort.</li>
+        <li><strong>Disabled:</strong> Uses shallow clone. Slow (10+s), time-sorted.</li>
+      </ul>
+    </li>
+  </ol>
+  <p><em>Tip: Run a build first to populate local refs, then "Build with Parameters" will be instant with time-based sorting.</em></p>
+</div>
