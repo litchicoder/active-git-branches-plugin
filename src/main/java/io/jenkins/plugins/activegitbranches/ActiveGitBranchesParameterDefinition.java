@@ -31,6 +31,7 @@ import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest;
+import org.eclipse.jgit.transport.URIish;
 
 import java.io.File;
 import java.io.IOException;
@@ -161,7 +162,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     /**
      * Fetches branches from the remote Git repository.
      * Strategy:
-     * 1. Try workspace fetch + for-each-ref (fast + time-sorted) - PREFERRED
+     * 1. Try workspace fetch + for-each-ref (lightweight fetch + time-sorted) - PREFERRED
      * 2. If no workspace: use ls-remote (fast, alphabetical) or clone (slow, time-sorted)
      */
     private List<BranchInfo> fetchBranchesInternal() throws IOException, InterruptedException {
@@ -169,7 +170,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             throw new IOException("Repository URL is not configured");
         }
 
-        // First, always try workspace-based fetch (fast + preserves time sorting)
+        // First, always try workspace-based fetch (lightweight fetch + preserves time sorting)
         List<BranchInfo> result = tryFetchFromWorkspace();
         if (result != null) {
             LOGGER.info("Fetched branches from workspace with time-based sorting");
@@ -293,8 +294,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     }
 
     /**
-     * Fetch branches from an existing workspace by reading local refs only.
-     * No network operation - instant response.
+     * Fetch branches from an existing workspace.
+     * Performs a lightweight fetch to update refs, then reads local refs.
      * Returns null if no local refs found (caller should fall back to other methods).
      */
     private List<BranchInfo> fetchBranchesFromWorkspace(FilePath workspace) throws IOException, InterruptedException {
@@ -308,15 +309,23 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                 .using("jgit")
                 .getClient();
         
-        // Only read existing local refs (instant, no network)
+        // Add credentials if available
+        StandardCredentials credentials = getCredentials();
+        if (credentials != null) {
+            git.addCredentials(repositoryUrl, credentials);
+        }
+        
+        // Read cached local refs (instant, no network)
         List<BranchInfo> localRefs = readLocalRefs(git);
+        
+        // If we have cached refs, use them directly (fast path)
         if (!localRefs.isEmpty()) {
             LOGGER.info("Using cached local refs (" + localRefs.size() + " branches)");
             return applyLimits(localRefs);
         }
         
-        // No local refs found, return null to fall back to other methods
-        LOGGER.info("No local refs found in workspace, will use fallback method");
+        // No cached refs in workspace, return null to fall back to ls-remote
+        LOGGER.info("No cached refs in workspace, falling back to other method");
         return null;
     }
 
