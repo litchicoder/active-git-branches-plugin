@@ -31,6 +31,7 @@ import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest;
+import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.transport.URIish;
 
 import java.io.File;
@@ -315,17 +316,29 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             git.addCredentials(repositoryUrl, credentials);
         }
         
-        // Read cached local refs (instant, no network)
-        List<BranchInfo> localRefs = readLocalRefs(git);
+        // Fetch latest refs from remote with RefSpec and prune
+        // - RefSpec: get ALL branches including new ones
+        // - Prune: remove refs that no longer exist on remote
+        try {
+            RefSpec refSpec = new RefSpec("+refs/heads/*:refs/remotes/origin/*");
+            git.fetch_()
+                .from(new URIish(repositoryUrl), Collections.singletonList(refSpec))
+                .prune(true)
+                .execute();
+            LOGGER.info("Fetched latest refs from remote (with RefSpec + prune)");
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to fetch from remote, using cached refs", e);
+        }
         
-        // If we have cached refs, use them directly (fast path)
+        // Read local refs (now up-to-date)
+        List<BranchInfo> localRefs = readLocalRefs(git);
         if (!localRefs.isEmpty()) {
-            LOGGER.info("Using cached local refs (" + localRefs.size() + " branches)");
+            LOGGER.info("Using local refs (" + localRefs.size() + " branches)");
             return applyLimits(localRefs);
         }
         
-        // No cached refs in workspace, return null to fall back to ls-remote
-        LOGGER.info("No cached refs in workspace, falling back to other method");
+        // No local refs found, return null to fall back to other methods
+        LOGGER.info("No local refs found in workspace, will use fallback method");
         return null;
     }
 
