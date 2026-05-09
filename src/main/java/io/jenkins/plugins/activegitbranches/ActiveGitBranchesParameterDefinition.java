@@ -61,6 +61,13 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     private String alwaysIncludeBranches;
     private String defaultValue;
     private boolean useQuickFetch = true;
+    private boolean allowCustomBranch = false;
+
+    /**
+     * Sentinel option value sent by index.jelly when user picks "Custom..." entry.
+     * The actual branch name is then read from the customValue text input.
+     */
+    static final String CUSTOM_BRANCH_SENTINEL = "__custom__";
 
     @DataBoundConstructor
     public ActiveGitBranchesParameterDefinition(String name, String repositoryUrl, int maxBranchCount, String description) {
@@ -122,19 +129,70 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         this.useQuickFetch = useQuickFetch;
     }
 
+    public boolean isAllowCustomBranch() {
+        return allowCustomBranch;
+    }
+
+    @DataBoundSetter
+    public void setAllowCustomBranch(boolean allowCustomBranch) {
+        this.allowCustomBranch = allowCustomBranch;
+    }
+
     @Override
     public ParameterValue createValue(StaplerRequest req, JSONObject jo) {
-        String value = jo.getString("value");
-        return new ActiveGitBranchesParameterValue(getName(), value, getDescription());
+        String value = jo.optString("value", "");
+        if (allowCustomBranch && CUSTOM_BRANCH_SENTINEL.equals(value)) {
+            value = jo.optString("customValue", "");
+        }
+        return new ActiveGitBranchesParameterValue(getName(), sanitizeBranchName(value), getDescription());
     }
 
     @Override
     public ParameterValue createValue(StaplerRequest req) {
         String[] values = req.getParameterValues(getName());
         if (values != null && values.length > 0) {
-            return new ActiveGitBranchesParameterValue(getName(), values[0], getDescription());
+            String value = values[0];
+            if (allowCustomBranch && CUSTOM_BRANCH_SENTINEL.equals(value)) {
+                String[] customValues = req.getParameterValues("customValue");
+                value = (customValues != null && customValues.length > 0) ? customValues[0] : "";
+            }
+            return new ActiveGitBranchesParameterValue(getName(), sanitizeBranchName(value), getDescription());
         }
         return getDefaultParameterValue();
+    }
+
+    /**
+     * Trim whitespace and reject characters that have no business appearing in a git ref name.
+     * Returns "" if the input is null/blank or contains forbidden characters; the form layer
+     * is expected to surface this back to the user via getDefaultParameterValue() fallback,
+     * and the build itself will fail fast if an empty branch is passed downstream.
+     */
+    static String sanitizeBranchName(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || CUSTOM_BRANCH_SENTINEL.equals(trimmed)) {
+            return "";
+        }
+        // Block obvious injection / malformed ref names (see git-check-ref-format).
+        if (trimmed.startsWith("-")
+                || trimmed.contains("..")
+                || trimmed.contains(" ")
+                || trimmed.contains("\t")
+                || trimmed.contains("\n")
+                || trimmed.contains("\r")
+                || trimmed.contains("\\")
+                || trimmed.contains("~")
+                || trimmed.contains("^")
+                || trimmed.contains(":")
+                || trimmed.contains("?")
+                || trimmed.contains("*")
+                || trimmed.contains("[")) {
+            LOGGER.warning("Rejected custom branch name with invalid characters: " + trimmed);
+            return "";
+        }
+        return trimmed;
     }
 
     @Override

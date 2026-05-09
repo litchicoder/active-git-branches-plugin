@@ -34,6 +34,10 @@
         <f:checkbox default="true" />
     </f:entry>
 
+    <f:entry title="${%Allow Custom Branch}" field="allowCustomBranch">
+        <f:checkbox default="false" />
+    </f:entry>
+
     <f:entry title="${%Default Value}" field="defaultValue">
         <f:select />
     </f:entry>

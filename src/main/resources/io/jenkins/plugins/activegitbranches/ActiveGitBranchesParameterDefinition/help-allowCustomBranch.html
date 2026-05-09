@@ -1,0 +1,25 @@
+<div>
+    <p>
+        When enabled, the parameter dropdown will include an extra
+        <code>✏ Custom (manual input)...</code> option. Selecting it reveals a text
+        field where the user can type any branch name, even if that branch is not
+        in the active list (or is excluded by <em>Branch Filter</em>).
+    </p>
+    <p>
+        Use this when you want users to occasionally build branches that are
+        outside the active set (e.g. an old release branch) without having to
+        loosen the <em>Branch Filter</em> regex permanently.
+    </p>
+    <p><strong>Notes:</strong></p>
+    <ul>
+        <li>Manual input <strong>bypasses the Branch Filter regex</strong>.</li>
+        <li>The branch name is trimmed and rejected if it contains whitespace or
+            any of <code>~ ^ : ? * [ \</code>, starts with <code>-</code>, or
+            contains <code>..</code> (basic git ref-name hygiene).</li>
+        <li>Existence on the remote is <strong>not</strong> verified at submit
+            time; if the branch does not exist, the build will fail at the SCM
+            checkout step as usual.</li>
+        <li>Default: disabled. Recommended only for jobs whose builders trust the
+            user to choose any branch.</li>
+    </ul>
+</div>
