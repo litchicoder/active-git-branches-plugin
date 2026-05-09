@@ -95,6 +95,51 @@
                 <groupId>org.jenkins-ci.tools</groupId>
                 <artifactId>maven-hpi-plugin</artifactId>
             </plugin>
+            <!--
+              Force a full (non-incremental) recompile every time. Reasoning:
+              the SezPoz annotation processor that backs Jenkins's @Extension
+              writes META-INF/annotations/hudson.Extension only as a side effect
+              of javac running. If even one IDE/IDE-extension touches files in
+              target/classes without invoking SezPoz, the plugin runs but the
+              descriptor index is silently missing, producing the runtime error
+              "ActiveGitBranchesParameterDefinition is missing its descriptor".
+
+              `useIncrementalCompilation=false` alone is insufficient because
+              maven-compiler-plugin still short-circuits with "Nothing to
+              compile" when every .class is newer than its .java. To guarantee
+              javac (and SezPoz) actually run on every Maven invocation we also
+              wipe target/classes at the `initialize` phase, before the compile
+              staleness check happens. This makes `mvn compile`, `mvn hpi:run`,
+              and `mvn package` all produce a complete META-INF/annotations.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>force-rebuild-classes</id>
+                        <phase>initialize</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                        <configuration>
+                            <excludeDefaultDirectories>true</excludeDefaultDirectories>
+                            <filesets>
+                                <fileset>
+                                    <directory>${project.build.outputDirectory}</directory>
+                                </fileset>
+                            </filesets>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>
