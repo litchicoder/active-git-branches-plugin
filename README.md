@@ -173,6 +173,10 @@ mvn test
 - For GitHub, use a Personal Access Token instead of password
 - For SSH, ensure the SSH key is properly configured in Jenkins
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes (English / 中文).
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit issues and pull requests.
