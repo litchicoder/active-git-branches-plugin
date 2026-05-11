@@ -38,6 +38,11 @@ import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.Collections;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -53,6 +58,26 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
 
     private static final long serialVersionUID = 1L;
     private static final Logger LOGGER = Logger.getLogger(ActiveGitBranchesParameterDefinition.class.getName());
+
+    // ---------------------------------------------------------------------
+    // Stale-while-revalidate (SWR) cache. Cache lives for the lifetime of
+    // this JVM (cleared on Jenkins restart / plugin reload). Every call to
+    // fetchBranches() returns cached data immediately when available and
+    // kicks off an async refresh; cold start synchronously fetches once.
+    // See discussion in README / chat history for the design rationale.
+    // ---------------------------------------------------------------------
+    private static final ConcurrentMap<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentMap<CacheKey, Object> REFRESHING = new ConcurrentHashMap<>();
+    private static final Object REFRESH_IN_FLIGHT = new Object();
+    private static final ExecutorService REFRESH_EXECUTOR = Executors.newFixedThreadPool(2, new ThreadFactory() {
+        private int counter = 0;
+        @Override
+        public synchronized Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "active-git-branches-refresh-" + (++counter));
+            t.setDaemon(true);
+            return t;
+        }
+    });
 
     private final String repositoryUrl;
     private String credentialsId;
@@ -206,16 +231,120 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     }
 
     /**
-     * Fetches branches from the remote Git repository.
-     * This method suppresses exceptions and returns an empty list on failure.
+     * Returns the branch list shown to the user. Uses a stale-while-revalidate
+     * cache:
+     * <ul>
+     *   <li><b>Cache hit:</b> return cached snapshot immediately, kick off an
+     *       async background refresh so subsequent calls see fresher data.</li>
+     *   <li><b>Cache miss (cold start / first call after restart):</b> fetch
+     *       synchronously; on success populate the cache, on failure return an
+     *       empty list and leave the cache empty so the next call retries.</li>
+     * </ul>
+     * Background refresh failures keep the existing cached snapshot intact and
+     * only flip {@code lastRefreshFailed} so the UI can warn the user.
      */
     public List<BranchInfo> fetchBranches() {
+        CacheKey key = buildCacheKey();
+        Job<?, ?> currentJob = captureCurrentJob();
+
+        CacheEntry hit = CACHE.get(key);
+        if (hit != null) {
+            triggerBackgroundRefresh(key, currentJob);
+            return hit.branches;
+        }
+
+        // Cold start: synchronous fetch; users will wait once.
         try {
-            return fetchBranchesInternal();
+            List<BranchInfo> fresh = fetchBranchesInternal(currentJob);
+            CACHE.put(key, new CacheEntry(fresh, System.currentTimeMillis(), false));
+            return fresh;
         } catch (Exception e) {
             LOGGER.log(Level.WARNING, "Failed to fetch branches from repository: " + repositoryUrl, e);
             return new ArrayList<>();
         }
+    }
+
+    private CacheKey buildCacheKey() {
+        return new CacheKey(repositoryUrl, credentialsId, maxBranchCount,
+                branchFilter, alwaysIncludeBranches, useQuickFetch);
+    }
+
+    /**
+     * Human-readable age of the cached branch list (e.g. "5 seconds ago",
+     * "2 minutes ago"), or {@code null} if the cache is empty. Exposed for
+     * the Jelly view to render a "fetched X ago" hint under the dropdown.
+     */
+    public String getCacheFetchedAgoText() {
+        CacheEntry entry = CACHE.get(buildCacheKey());
+        if (entry == null) {
+            return null;
+        }
+        return formatAge(System.currentTimeMillis() - entry.fetchedAt);
+    }
+
+    /**
+     * Whether the most recent background refresh failed; used by the Jelly
+     * view to show a small warning next to the freshness hint.
+     */
+    public boolean isLastRefreshFailed() {
+        CacheEntry entry = CACHE.get(buildCacheKey());
+        return entry != null && entry.lastRefreshFailed;
+    }
+
+    private static String formatAge(long ageMs) {
+        if (ageMs < 1000L) return "just now";
+        long seconds = ageMs / 1000L;
+        if (seconds < 60) return seconds + (seconds == 1 ? " second ago" : " seconds ago");
+        long minutes = seconds / 60;
+        if (minutes < 60) return minutes + (minutes == 1 ? " minute ago" : " minutes ago");
+        long hours = minutes / 60;
+        if (hours < 24) return hours + (hours == 1 ? " hour ago" : " hours ago");
+        long days = hours / 24;
+        return days + (days == 1 ? " day ago" : " days ago");
+    }
+
+    /**
+     * Best-effort lookup of the Job ancestor of the current Stapler request,
+     * if any. The Job reference (not the request) is what the workspace-based
+     * fetch path needs, so we capture it here and pass it down — including to
+     * the background refresh thread, where there is no Stapler request anymore.
+     */
+    private static Job<?, ?> captureCurrentJob() {
+        try {
+            StaplerRequest req = Stapler.getCurrentRequest();
+            if (req == null) return null;
+            return req.findAncestorObject(Job.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Kick off an async refresh for the given cache key. Deduplicates: only one
+     * refresh per key runs at a time; concurrent callers will all be served
+     * from the existing cache entry without piling up git operations.
+     */
+    private void triggerBackgroundRefresh(CacheKey key, Job<?, ?> job) {
+        if (REFRESHING.putIfAbsent(key, REFRESH_IN_FLIGHT) != null) {
+            return;
+        }
+        REFRESH_EXECUTOR.submit(() -> {
+            try {
+                List<BranchInfo> fresh = fetchBranchesInternal(job);
+                CACHE.put(key, new CacheEntry(fresh, System.currentTimeMillis(), false));
+                LOGGER.fine("Background branch refresh succeeded for " + repositoryUrl);
+            } catch (Exception e) {
+                LOGGER.log(Level.WARNING,
+                        "Background branch refresh failed for " + repositoryUrl
+                                + "; keeping previous cached list", e);
+                CacheEntry existing = CACHE.get(key);
+                if (existing != null && !existing.lastRefreshFailed) {
+                    CACHE.replace(key, existing, existing.withRefreshFailed());
+                }
+            } finally {
+                REFRESHING.remove(key);
+            }
+        });
     }
 
     /**
@@ -223,14 +352,18 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
      * Strategy:
      * 1. Try workspace fetch + for-each-ref (lightweight fetch + time-sorted) - PREFERRED
      * 2. If no workspace: use ls-remote (fast, alphabetical) or clone (slow, time-sorted)
+     *
+     * @param job the current Job, used by the workspace fetch path; may be {@code null}
+     *            when running outside a Stapler request (e.g. background refresh) in
+     *            which case the workspace path is skipped.
      */
-    private List<BranchInfo> fetchBranchesInternal() throws IOException, InterruptedException {
+    private List<BranchInfo> fetchBranchesInternal(Job<?, ?> job) throws IOException, InterruptedException {
         if (repositoryUrl == null || repositoryUrl.isEmpty()) {
             throw new IOException("Repository URL is not configured");
         }
 
         // First, always try workspace-based fetch (lightweight fetch + preserves time sorting)
-        List<BranchInfo> result = tryFetchFromWorkspace();
+        List<BranchInfo> result = tryFetchFromWorkspace(job);
         if (result != null) {
             LOGGER.info("Fetched branches from workspace with time-based sorting");
             return result;
@@ -308,44 +441,37 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     /**
      * Try to fetch branches from existing Job workspace.
      * Uses git fetch + for-each-ref which is faster than cloning.
-     * Returns null if workspace is not available.
+     * Returns null if workspace is not available, or when {@code job} is
+     * {@code null} (e.g. invoked from a background refresh thread without a
+     * Stapler request, in which case we fall through to ls-remote / clone).
      */
-    private List<BranchInfo> tryFetchFromWorkspace() {
+    private List<BranchInfo> tryFetchFromWorkspace(Job<?, ?> job) {
+        if (job == null) {
+            LOGGER.fine("No Job context available, skipping workspace fetch");
+            return null;
+        }
         try {
-            // Get the current Job from Stapler request context
-            StaplerRequest request = Stapler.getCurrentRequest();
-            if (request == null) {
-                LOGGER.fine("No Stapler request context available");
-                return null;
-            }
-            
-            Job<?, ?> job = request.findAncestorObject(Job.class);
-            if (job == null) {
-                LOGGER.fine("No Job found in request context");
-                return null;
-            }
-            
             // Get workspace
             FilePath workspace = null;
             if (job instanceof AbstractProject) {
                 workspace = ((AbstractProject<?, ?>) job).getSomeWorkspace();
             }
-            
+
             if (workspace == null || !workspace.exists()) {
                 LOGGER.fine("Workspace not available for job: " + job.getFullName());
                 return null;
             }
-            
+
             // Check if .git directory exists
             FilePath gitDir = workspace.child(".git");
             if (!gitDir.exists()) {
                 LOGGER.fine("No .git directory in workspace: " + workspace.getRemote());
                 return null;
             }
-            
+
             LOGGER.info("Using existing workspace for branch fetch: " + workspace.getRemote());
             return fetchBranchesFromWorkspace(workspace);
-            
+
         } catch (Exception e) {
             LOGGER.log(Level.FINE, "Failed to fetch from workspace, will fall back to clone", e);
             return null;
@@ -645,6 +771,72 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         }
     }
 
+    /**
+     * Identifies a cached branch list. Two parameter definitions whose
+     * cache-affecting fields are all equal share the same cache entry, so two
+     * Jobs configured against the same repository (with the same credentials,
+     * filters, etc.) benefit from each other's warm cache.
+     */
+    static final class CacheKey {
+        private final String repositoryUrl;
+        private final String credentialsId;
+        private final int maxBranchCount;
+        private final String branchFilter;
+        private final String alwaysIncludeBranches;
+        private final boolean useQuickFetch;
+
+        CacheKey(String repositoryUrl, String credentialsId, int maxBranchCount,
+                 String branchFilter, String alwaysIncludeBranches, boolean useQuickFetch) {
+            this.repositoryUrl = repositoryUrl;
+            this.credentialsId = credentialsId;
+            this.maxBranchCount = maxBranchCount;
+            this.branchFilter = branchFilter;
+            this.alwaysIncludeBranches = alwaysIncludeBranches;
+            this.useQuickFetch = useQuickFetch;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof CacheKey)) return false;
+            CacheKey other = (CacheKey) o;
+            return maxBranchCount == other.maxBranchCount
+                    && useQuickFetch == other.useQuickFetch
+                    && Objects.equals(repositoryUrl, other.repositoryUrl)
+                    && Objects.equals(credentialsId, other.credentialsId)
+                    && Objects.equals(branchFilter, other.branchFilter)
+                    && Objects.equals(alwaysIncludeBranches, other.alwaysIncludeBranches);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(repositoryUrl, credentialsId, maxBranchCount,
+                    branchFilter, alwaysIncludeBranches, useQuickFetch);
+        }
+    }
+
+    /**
+     * Immutable cached snapshot. {@code lastRefreshFailed} signals that the
+     * branch list shown to the user may be out of date because the most recent
+     * background refresh hit an error; the data itself is kept around so the UI
+     * keeps working.
+     */
+    static final class CacheEntry {
+        final List<BranchInfo> branches;
+        final long fetchedAt;
+        final boolean lastRefreshFailed;
+
+        CacheEntry(List<BranchInfo> branches, long fetchedAt, boolean lastRefreshFailed) {
+            this.branches = Collections.unmodifiableList(new ArrayList<>(branches));
+            this.fetchedAt = fetchedAt;
+            this.lastRefreshFailed = lastRefreshFailed;
+        }
+
+        CacheEntry withRefreshFailed() {
+            return new CacheEntry(branches, fetchedAt, true);
+        }
+    }
+
     @Symbol("activeGitBranches")
     @Extension
     public static class DescriptorImpl extends ParameterDescriptor {
@@ -815,7 +1007,9 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             tempDef.setAlwaysIncludeBranches(alwaysIncludeBranches);
 
             try {
-                List<BranchInfo> branches = tempDef.fetchBranchesInternal();
+                // testConnection is invoked from the config page where no Job context
+                // is meaningful for the workspace fetch path, so pass null.
+                List<BranchInfo> branches = tempDef.fetchBranchesInternal(null);
                 if (branches.isEmpty()) {
                     return FormValidation.warning("Connection successful, but no branches found matching the filter");
                 }

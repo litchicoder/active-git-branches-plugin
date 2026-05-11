@@ -6,6 +6,8 @@
         <div name="parameter" class="active-git-branches-parameter" data-agb-name="${it.name}">
             <input type="hidden" name="name" value="${it.name}" />
             <j:set var="branches" value="${it.fetchBranches()}" />
+            <j:set var="fetchedAgo" value="${it.cacheFetchedAgoText}" />
+            <j:set var="lastRefreshFailed" value="${it.lastRefreshFailed}" />
             <j:choose>
                 <j:when test="${empty(branches) and !it.allowCustomBranch}">
                     <select name="value" class="setting-input" disabled="disabled">
@@ -60,6 +62,18 @@
                                 update();
                             })();
                         ]]></script>
+                    </j:if>
+                    <j:if test="${fetchedAgo != null}">
+                        <div class="agb-cache-meta" style="font-size:11px; color:#888; margin-top:3px;">
+                            <span>fetched ${fetchedAgo}</span>
+                            <j:if test="${lastRefreshFailed}">
+                                <span style="color:#b08800;" title="The most recent background refresh failed; the list above may be stale.">
+                                    · ⚠ last refresh failed
+                                </span>
+                            </j:if>
+                            <span>·</span>
+                            <a href="javascript:location.reload()">refresh</a>
+                        </div>
                     </j:if>
                 </j:otherwise>
             </j:choose>
