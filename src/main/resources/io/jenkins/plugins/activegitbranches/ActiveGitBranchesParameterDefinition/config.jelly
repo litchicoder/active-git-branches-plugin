@@ -30,6 +30,10 @@
         <f:textbox />
     </f:entry>
 
+    <f:entry title="${%Exclude Branches (Regex)}" field="excludeBranches">
+        <f:textbox />
+    </f:entry>
+
     <f:entry title="${%Use Quick Fetch}" field="useQuickFetch">
         <f:checkbox default="true" />
     </f:entry>
@@ -38,10 +42,16 @@
         <f:select />
     </f:entry>
 
+    <f:advanced>
+        <f:entry title="${%Subdirectory}" field="subdirectory">
+            <f:textbox placeholder="Auto-detected if blank (e.g. GlazeroAppAndroid)" />
+        </f:entry>
+    </f:advanced>
+
     <f:entry title="">
         <f:validateButton title="${%Test Connection}" progress="${%Testing...}"
                           method="testConnection" 
-                          with="repositoryUrl,credentialsId,maxBranchCount,branchFilter,alwaysIncludeBranches" />
+                          with="repositoryUrl,credentialsId,maxBranchCount,branchFilter,alwaysIncludeBranches,excludeBranches,subdirectory" />
     </f:entry>
 
 </j:jelly>

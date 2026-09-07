@@ -3,21 +3,27 @@
          xmlns:l="/lib/layout" xmlns:t="/lib/hudson" xmlns:f="/lib/form">
 
     <f:entry title="${it.name}" description="${it.description}">
-        <div name="parameter" class="active-git-branches-parameter">
+        <div name="parameter" class="active-git-branches-parameter" data-agb-name="${it.name}">
             <input type="hidden" name="name" value="${it.name}" />
             <j:set var="branches" value="${it.fetchBranches()}" />
+            <j:set var="fetchedAgo" value="${it.cacheFetchedAgoText}" />
+            <j:set var="lastRefreshFailed" value="${it.lastRefreshFailed}" />
+            <j:set var="effectiveDefault" value="${it.effectiveDefaultValue}" />
             <j:choose>
-                <j:when test="${empty(branches)}">
+                <j:when test="${empty(branches) and !it.allowCustomBranch}">
                     <select name="value" class="setting-input" disabled="disabled">
                         <option value="">-- No branches available --</option>
                     </select>
                     <div class="error">Unable to fetch branches from repository. Please check the configuration.</div>
                 </j:when>
                 <j:otherwise>
-                    <select name="value" class="setting-input">
+                    <select name="value" class="setting-input agb-select">
                         <j:forEach var="branch" items="${branches}">
                             <j:choose>
-                                <j:when test="${branch.name == it.defaultValue}">
+                                <j:when test="${branch.disabled}">
+                                    <option value="${branch.name}" disabled="disabled" style="color:#999; font-style:italic;">${branch.name} (disabled)</option>
+                                </j:when>
+                                <j:when test="${branch.name == effectiveDefault}">
                                     <option value="${branch.name}" selected="selected">${branch.name}</option>
                                 </j:when>
                                 <j:otherwise>
@@ -25,7 +31,54 @@
                                 </j:otherwise>
                             </j:choose>
                         </j:forEach>
+                        <j:if test="${it.allowCustomBranch}">
+                            <option disabled="disabled">──────────</option>
+                            <option value="__custom__">✏ Custom (manual input)...</option>
+                        </j:if>
                     </select>
+                    <j:if test="${it.allowCustomBranch}">
+                        <div class="agb-custom-wrapper" style="display:none; margin-top:6px;">
+                            <input type="text" name="customValue" class="setting-input agb-custom-input"
+                                   placeholder="Enter branch name (e.g. feature/my-branch)"
+                                   autocomplete="off" disabled="disabled" />
+                            <div class="agb-custom-hint" style="font-size:11px; color:#666; margin-top:2px;">
+                                Manual input bypasses the branch filter. Whitespace and characters like ~ ^ : ? * [ \\ are rejected.
+                            </div>
+                        </div>
+                        <script><![CDATA[
+                            (function() {
+                                var scripts = document.getElementsByTagName('script');
+                                var current = scripts[scripts.length - 1];
+                                var root = current.parentNode; // .active-git-branches-parameter
+                                var select = root.querySelector('select.agb-select');
+                                var wrapper = root.querySelector('.agb-custom-wrapper');
+                                if (!select || !wrapper) { return; }
+                                var input = wrapper.querySelector('input.agb-custom-input');
+                                function update() {
+                                    var isCustom = (select.value === '__custom__');
+                                    wrapper.style.display = isCustom ? '' : 'none';
+                                    if (input) {
+                                        input.disabled = !isCustom;
+                                        if (isCustom) { setTimeout(function() { input.focus(); }, 0); }
+                                    }
+                                }
+                                select.addEventListener('change', update);
+                                update();
+                            })();
+                        ]]></script>
+                    </j:if>
+                    <j:if test="${fetchedAgo != null}">
+                        <div class="agb-cache-meta" style="font-size:11px; color:#888; margin-top:3px;">
+                            <span>fetched ${fetchedAgo}</span>
+                            <j:if test="${lastRefreshFailed}">
+                                <span style="color:#b08800;" title="The most recent background refresh failed; the list above may be stale.">
+                                    · ⚠ last refresh failed
+                                </span>
+                            </j:if>
+                            <span>·</span>
+                            <a href="javascript:location.reload()">refresh</a>
+                        </div>
+                    </j:if>
                 </j:otherwise>
             </j:choose>
         </div>
