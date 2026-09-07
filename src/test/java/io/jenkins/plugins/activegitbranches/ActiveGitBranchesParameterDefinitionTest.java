@@ -3,20 +3,15 @@ package io.jenkins.plugins.activegitbranches;
 import hudson.model.ParameterValue;
 import hudson.util.FormValidation;
 import net.sf.json.JSONObject;
-import org.junit.Rule;
-import org.junit.Test;
-import org.jvnet.hudson.test.JenkinsRule;
-import org.kohsuke.stapler.StaplerRequest;
+import org.junit.jupiter.api.Test;
+import org.kohsuke.stapler.StaplerRequest2;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for ActiveGitBranchesParameterDefinition.
  */
 public class ActiveGitBranchesParameterDefinitionTest {
-
-    @Rule
-    public JenkinsRule jenkins = new JenkinsRule();
 
     @Test
     public void testParameterCreation() {
@@ -436,20 +431,20 @@ public class ActiveGitBranchesParameterDefinitionTest {
         // 1. Direct forbidden branch
         JSONObject jo = new JSONObject();
         jo.put("value", "master");
-        ParameterValue val = param.createValue((StaplerRequest) null, jo);
+        ParameterValue val = param.createValue((StaplerRequest2) null, jo);
         assertEquals("", ((ActiveGitBranchesParameterValue) val).getValue());
 
         // 2. Custom input attempting forbidden branch
         JSONObject joCustom = new JSONObject();
         joCustom.put("value", "__custom__");
         joCustom.put("customValue", "main");
-        ParameterValue valCustom = param.createValue((StaplerRequest) null, joCustom);
+        ParameterValue valCustom = param.createValue((StaplerRequest2) null, joCustom);
         assertEquals("", ((ActiveGitBranchesParameterValue) valCustom).getValue());
 
         // 3. Allowed branch
         JSONObject joAllowed = new JSONObject();
         joAllowed.put("value", "feature/awesome");
-        ParameterValue valAllowed = param.createValue((StaplerRequest) null, joAllowed);
+        ParameterValue valAllowed = param.createValue((StaplerRequest2) null, joAllowed);
         assertEquals("feature/awesome", ((ActiveGitBranchesParameterValue) valAllowed).getValue());
     }
 

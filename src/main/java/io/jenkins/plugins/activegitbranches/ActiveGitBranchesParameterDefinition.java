@@ -30,7 +30,7 @@ import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.Stapler;
-import org.kohsuke.stapler.StaplerRequest;
+import org.kohsuke.stapler.StaplerRequest2;
 import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.transport.URIish;
 import org.eclipse.jgit.lib.Repository;
@@ -187,7 +187,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     }
 
     @Override
-    public ParameterValue createValue(StaplerRequest req, JSONObject jo) {
+    public ParameterValue createValue(StaplerRequest2 req, JSONObject jo) {
         String value = jo.optString("value", "");
         if (allowCustomBranch && CUSTOM_BRANCH_SENTINEL.equals(value)) {
             value = jo.optString("customValue", "");
@@ -201,7 +201,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     }
 
     @Override
-    public ParameterValue createValue(StaplerRequest req) {
+    public ParameterValue createValue(StaplerRequest2 req) {
         String[] values = req.getParameterValues(getName());
         if (values != null && values.length > 0) {
             String value = values[0];
@@ -367,7 +367,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
      */
     private static Job<?, ?> captureCurrentJob() {
         try {
-            StaplerRequest req = Stapler.getCurrentRequest();
+            StaplerRequest2 req = Stapler.getCurrentRequest2();
             if (req == null) return null;
             return req.findAncestorObject(Job.class);
         } catch (Exception e) {
