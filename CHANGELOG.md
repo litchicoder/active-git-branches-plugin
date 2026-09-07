@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.7.0] - 2026-09-07
+
+### Added
+- **Disabled/Exclude Branches (Regex)**:
+  - New parameter option `excludeBranches` to disable or prohibit selection of specific branches (e.g. `(master|main)` or `release/.*`).
+  - **Visual Disabled UI (形式 2)**: Branches matching the regex remain visible in the dropdown but are styled with `disabled="disabled"` and labeled with `(disabled)`, making it clear to users which branches are forbidden while preventing selection.
+  - **Security enforcement**: Users cannot bypass the exclusion rule via Custom Branch input (`allowCustomBranch`); manual submissions matching the exclusion pattern are rejected at parameter creation time.
+  - **Smart default resolution**: If the configured `defaultValue` is excluded, the plugin automatically falls back to the first available non-disabled branch.
+  - Added regex validation `doCheckExcludeBranches` and documentation `help-excludeBranches.html`.
+
+---
+
+### 新增
+- **禁用分支选项（Exclude / Disabled Branches 正则支持）**：
+  - 新增参数选项 `excludeBranches`，支持通过正则表达式禁用或禁止选择特定分支（如 `(master|main)` 或 `release/.*`）。
+  - **置灰禁用交互（形式 2）**：匹配禁用规则的分支仍会在下拉列表中保留显示，但通过 HTML `disabled` 属性置灰并追加 `(disabled)` 标识，直观展示哪些分支不可用，同时禁止用户点击选中。
+  - **防绕过安全校验**：即使用户开启了手动输入（`allowCustomBranch`），手动提交被禁用的分支名称也会在参数创建阶段被系统拦截并阻断。
+  - **智能默认值回退**：若原本配置的 `defaultValue` 命中了禁用分支，系统自动回退并选中列表中的第一个非禁用分支。
+  - 补充正则语法校验 `doCheckExcludeBranches` 与说明文档 `help-excludeBranches.html`。
+
+---
+
+## [1.6.1] - 2026-09-07
+
+### Added
+- **Subdirectory Git repository support (auto-detection + manual override)**:
+  - **Auto-detection**: If the root workspace does not contain `.git`, the plugin automatically scans direct 1-level subdirectories (e.g. `workspace/GlazeroAppAndroid`), inspecting `.git/config` and matching the remote repository URL via JGit `URIish` normalization (supporting HTTPS, SSH, SCP-like syntax, trailing `.git`).
+  - **Manual override**: Added an optional `subdirectory` parameter to explicitly specify the repository path within the workspace for deeply nested repositories.
+  - Preserves time-based sorting and lightweight fetch in multi-repo and "Check out to a sub-directory" configurations.
+- **Help text & config UI**: Added `help-subdirectory.html` and expanded `config.jelly` with an advanced `<f:advanced>` section for `subdirectory`.
+
+---
+
+### 新增
+- **工作区子目录 Git 仓库支持（自动探测 + 手动指定）**：
+  - **自动探测**：当工作区根目录下没有 `.git` 时，插件会自动扫描一层直接子目录（如 `workspace/GlazeroAppAndroid`），读取 `.git/config` 中的远端地址，并通过 JGit `URIish` 归一化算法（支持 HTTPS、SSH、SCP 格式、带/不带 `.git` 等差异）精准匹配目标仓库。
+  - **手动覆盖**：新增可选参数 `subdirectory`，允许用户在极端或深层嵌套路径下显式指定子目录路径。
+  - 在多仓库流水线或“检出到子目录（Check out to a sub-directory）”场景下，完整恢复了“按最新提交时间倒序”与“本地轻量增量 fetch”的核心体验。
+- **帮助文档与配置界面**：新增 `help-subdirectory.html` 并在高级设置项（`<f:advanced>`）中提供子目录配置项。
+
+---
+
 ## [1.6.0] - 2026-05-11
 
 ### Added

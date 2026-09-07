@@ -8,6 +8,7 @@
             <j:set var="branches" value="${it.fetchBranches()}" />
             <j:set var="fetchedAgo" value="${it.cacheFetchedAgoText}" />
             <j:set var="lastRefreshFailed" value="${it.lastRefreshFailed}" />
+            <j:set var="effectiveDefault" value="${it.effectiveDefaultValue}" />
             <j:choose>
                 <j:when test="${empty(branches) and !it.allowCustomBranch}">
                     <select name="value" class="setting-input" disabled="disabled">
@@ -19,7 +20,10 @@
                     <select name="value" class="setting-input agb-select">
                         <j:forEach var="branch" items="${branches}">
                             <j:choose>
-                                <j:when test="${branch.name == it.defaultValue}">
+                                <j:when test="${branch.disabled}">
+                                    <option value="${branch.name}" disabled="disabled" style="color:#999; font-style:italic;">${branch.name} (disabled)</option>
+                                </j:when>
+                                <j:when test="${branch.name == effectiveDefault}">
                                     <option value="${branch.name}" selected="selected">${branch.name}</option>
                                 </j:when>
                                 <j:otherwise>

@@ -33,6 +33,9 @@ import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest;
 import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.transport.URIish;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.StoredConfig;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 
 import java.io.File;
 import java.io.IOException;
@@ -84,9 +87,11 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     private final int maxBranchCount;
     private String branchFilter;
     private String alwaysIncludeBranches;
+    private String excludeBranches;
     private String defaultValue;
     private boolean useQuickFetch = true;
     private boolean allowCustomBranch = false;
+    private String subdirectory;
 
     /**
      * Sentinel option value sent by index.jelly when user picks "Custom..." entry.
@@ -136,6 +141,15 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         this.alwaysIncludeBranches = alwaysIncludeBranches;
     }
 
+    public String getExcludeBranches() {
+        return excludeBranches;
+    }
+
+    @DataBoundSetter
+    public void setExcludeBranches(String excludeBranches) {
+        this.excludeBranches = excludeBranches;
+    }
+
     public String getDefaultValue() {
         return defaultValue;
     }
@@ -163,13 +177,27 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         this.allowCustomBranch = allowCustomBranch;
     }
 
+    public String getSubdirectory() {
+        return subdirectory;
+    }
+
+    @DataBoundSetter
+    public void setSubdirectory(String subdirectory) {
+        this.subdirectory = subdirectory;
+    }
+
     @Override
     public ParameterValue createValue(StaplerRequest req, JSONObject jo) {
         String value = jo.optString("value", "");
         if (allowCustomBranch && CUSTOM_BRANCH_SENTINEL.equals(value)) {
             value = jo.optString("customValue", "");
         }
-        return new ActiveGitBranchesParameterValue(getName(), sanitizeBranchName(value), getDescription());
+        String sanitized = sanitizeBranchName(value);
+        if (matchesExcludeBranches(sanitized)) {
+            LOGGER.warning("Rejected branch name because it is excluded: " + sanitized);
+            sanitized = "";
+        }
+        return new ActiveGitBranchesParameterValue(getName(), sanitized, getDescription());
     }
 
     @Override
@@ -181,7 +209,12 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                 String[] customValues = req.getParameterValues("customValue");
                 value = (customValues != null && customValues.length > 0) ? customValues[0] : "";
             }
-            return new ActiveGitBranchesParameterValue(getName(), sanitizeBranchName(value), getDescription());
+            String sanitized = sanitizeBranchName(value);
+            if (matchesExcludeBranches(sanitized)) {
+                LOGGER.warning("Rejected branch name because it is excluded: " + sanitized);
+                sanitized = "";
+            }
+            return new ActiveGitBranchesParameterValue(getName(), sanitized, getDescription());
         }
         return getDefaultParameterValue();
     }
@@ -224,10 +257,33 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     public ParameterValue getDefaultParameterValue() {
         List<BranchInfo> branches = fetchBranches();
         String value = defaultValue;
+        if (value != null && matchesExcludeBranches(value)) {
+            value = null; // Do not default to a disabled branch
+        }
         if ((value == null || value.isEmpty()) && !branches.isEmpty()) {
-            value = branches.get(0).getName();
+            for (BranchInfo b : branches) {
+                if (!b.isDisabled()) {
+                    value = b.getName();
+                    break;
+                }
+            }
+            if (value == null) {
+                value = branches.get(0).getName();
+            }
         }
         return new ActiveGitBranchesParameterValue(getName(), value != null ? value : "", getDescription());
+    }
+
+    /**
+     * Resolves the effective default branch name to be pre-selected in the UI.
+     * Skips any excluded/disabled branch and falls back to the first available active branch.
+     */
+    public String getEffectiveDefaultValue() {
+        ParameterValue pv = getDefaultParameterValue();
+        if (pv instanceof ActiveGitBranchesParameterValue) {
+            return ((ActiveGitBranchesParameterValue) pv).getValue();
+        }
+        return defaultValue != null ? defaultValue : "";
     }
 
     /**
@@ -266,7 +322,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
 
     private CacheKey buildCacheKey() {
         return new CacheKey(repositoryUrl, credentialsId, maxBranchCount,
-                branchFilter, alwaysIncludeBranches, useQuickFetch);
+                branchFilter, alwaysIncludeBranches, excludeBranches, useQuickFetch, subdirectory);
     }
 
     /**
@@ -416,16 +472,16 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                 if (refName.startsWith("refs/heads/")) {
                     String branchName = refName.substring("refs/heads/".length());
                     
-                    // Apply branch filter
                     boolean isAlwaysIncluded = matchesAlwaysInclude(branchName);
                     
                     if (!isAlwaysIncluded && !matchesBranchFilter(branchName)) {
                         continue;
                     }
                     
+                    boolean isDisabled = matchesExcludeBranches(branchName);
                     // Use 0 as commit time since ls-remote doesn't provide it
                     // Branches will be sorted alphabetically instead
-                    branchInfos.add(new BranchInfo(branchName, 0L));
+                    branchInfos.add(new BranchInfo(branchName, 0L, isDisabled));
                 }
             }
         } finally {
@@ -441,6 +497,15 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     /**
      * Try to fetch branches from existing Job workspace.
      * Uses git fetch + for-each-ref which is faster than cloning.
+     * Returns null if workspace is not available, or when {@code job} is
+     * {@code null} (e.g. invoked from a background refresh thread without a
+     * Stapler request, in which case we fall through to ls-remote / clone).
+     */
+    /**
+     * Try to fetch branches from existing Job workspace.
+     * Uses git fetch + for-each-ref which is faster than cloning.
+     * Supports both root workspace and subdirectory repositories (either
+     * auto-detected or explicitly configured via {@code subdirectory}).
      * Returns null if workspace is not available, or when {@code job} is
      * {@code null} (e.g. invoked from a background refresh thread without a
      * Stapler request, in which case we fall through to ls-remote / clone).
@@ -462,20 +527,190 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                 return null;
             }
 
-            // Check if .git directory exists
-            FilePath gitDir = workspace.child(".git");
-            if (!gitDir.exists()) {
-                LOGGER.fine("No .git directory in workspace: " + workspace.getRemote());
+            FilePath gitWorkspace = findGitWorkspace(workspace);
+            if (gitWorkspace == null) {
+                LOGGER.fine("No matching .git repository found in workspace: " + workspace.getRemote());
                 return null;
             }
 
-            LOGGER.info("Using existing workspace for branch fetch: " + workspace.getRemote());
-            return fetchBranchesFromWorkspace(workspace);
+            LOGGER.info("Using workspace for branch fetch: " + gitWorkspace.getRemote());
+            return fetchBranchesFromWorkspace(gitWorkspace);
 
         } catch (Exception e) {
             LOGGER.log(Level.FINE, "Failed to fetch from workspace, will fall back to clone", e);
             return null;
         }
+    }
+
+    /**
+     * Resolves the Git repository directory inside the workspace.
+     * Strategy:
+     * 1. If subdirectory is explicitly configured, check workspace/subdirectory
+     * 2. Check if the root workspace is the matching git repo
+     * 3. Auto-scan direct subdirectories (1 level only) and match remote URL
+     * 4. Fallback to root workspace if root has .git (backward compatibility)
+     */
+    FilePath findGitWorkspace(FilePath workspace) {
+        if (workspace == null) {
+            return null;
+        }
+
+        // 1. Manual subdirectory override
+        if (subdirectory != null && !subdirectory.trim().isEmpty()) {
+            FilePath custom = workspace.child(subdirectory.trim());
+            try {
+                if (custom.exists() && custom.child(".git").exists()) {
+                    LOGGER.info("Using configured subdirectory for branch fetch: " + custom.getRemote());
+                    return custom;
+                } else {
+                    LOGGER.warning("Configured subdirectory does not exist or has no .git: " + custom.getRemote());
+                }
+            } catch (Exception e) {
+                LOGGER.log(Level.FINE, "Error checking configured subdirectory: " + custom.getRemote(), e);
+            }
+        }
+
+        // 2. Check root workspace
+        boolean rootHasGit = false;
+        try {
+            rootHasGit = workspace.child(".git").exists();
+            if (rootHasGit && matchesRemoteUrl(workspace)) {
+                LOGGER.info("Using root workspace for branch fetch: " + workspace.getRemote());
+                return workspace;
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Error checking root .git", e);
+        }
+
+        // 3. Auto-scan direct subdirectories (1 level only)
+        try {
+            List<FilePath> subDirs = workspace.listDirectories();
+            if (subDirs != null) {
+                for (FilePath subDir : subDirs) {
+                    try {
+                        if (subDir.child(".git").exists() && matchesRemoteUrl(subDir)) {
+                            LOGGER.info("Auto-detected matching git repository in subdirectory: " + subDir.getName());
+                            return subDir;
+                        }
+                    } catch (Exception e) {
+                        LOGGER.log(Level.FINE, "Error checking subdirectory: " + subDir.getRemote(), e);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Failed to scan subdirectories for job workspace: " + workspace.getRemote(), e);
+        }
+
+        // 4. Backward compatibility fallback: if root had .git, use root
+        if (rootHasGit) {
+            LOGGER.info("Using root workspace as fallback: " + workspace.getRemote());
+            return workspace;
+        }
+
+        return null;
+    }
+
+    /**
+     * Checks if the directory is a git repository that matches the target repository URL.
+     */
+    boolean matchesRemoteUrl(FilePath dir) {
+        if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            File dirFile = new File(dir.getRemote());
+            File gitEntry = new File(dirFile, ".git");
+            if (!gitEntry.exists()) {
+                return false;
+            }
+            FileRepositoryBuilder builder = new FileRepositoryBuilder();
+            if (gitEntry.isDirectory()) {
+                builder.setGitDir(gitEntry);
+            } else {
+                builder.setWorkTree(dirFile).findGitDir(dirFile);
+            }
+            try (Repository repo = builder.build()) {
+                StoredConfig config = repo.getConfig();
+                Set<String> remotes = repo.getRemoteNames();
+                for (String remote : remotes) {
+                    String[] urls = config.getStringList("remote", remote, "url");
+                    if (urls != null) {
+                        for (String url : urls) {
+                            if (url != null && isSameGitUrl(url, repositoryUrl)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                String originUrl = config.getString("remote", "origin", "url");
+                if (originUrl != null && isSameGitUrl(originUrl, repositoryUrl)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.log(Level.FINE, "Failed to inspect git remote in " + dir.getRemote(), e);
+        }
+        return false;
+    }
+
+    /**
+     * Compares two Git repository URLs for equivalence, ignoring protocol differences,
+     * leading/trailing slashes, and .git extensions.
+     */
+    static boolean isSameGitUrl(String url1, String url2) {
+        if (url1 == null || url2 == null) {
+            return false;
+        }
+        String u1Trimmed = url1.trim();
+        String u2Trimmed = url2.trim();
+        if (u1Trimmed.equalsIgnoreCase(u2Trimmed)) {
+            return true;
+        }
+
+        try {
+            URIish u1 = new URIish(u1Trimmed);
+            URIish u2 = new URIish(u2Trimmed);
+            String host1 = u1.getHost();
+            String host2 = u2.getHost();
+            if (host1 != null && host2 != null && !host1.equalsIgnoreCase(host2)) {
+                return false;
+            }
+            String path1 = normalizeGitPath(u1.getPath());
+            String path2 = normalizeGitPath(u2.getPath());
+            if (!path1.isEmpty() && path1.equalsIgnoreCase(path2)) {
+                return true;
+            }
+        } catch (Exception e) {
+            // Fall back to simple path comparison if URIish parsing fails
+        }
+
+        String norm1 = normalizeGitPath(u1Trimmed);
+        String norm2 = normalizeGitPath(u2Trimmed);
+        return !norm1.isEmpty() && norm1.equalsIgnoreCase(norm2);
+    }
+
+    static String normalizeGitPath(String path) {
+        if (path == null) {
+            return "";
+        }
+        String p = path.trim().replace('\\', '/');
+        int colonIdx = p.indexOf(':');
+        if (colonIdx > 0 && !p.startsWith("http://") && !p.startsWith("https://") && !p.startsWith("file://")) {
+            p = p.substring(colonIdx + 1);
+        }
+        while (p.startsWith("/")) {
+            p = p.substring(1);
+        }
+        while (p.endsWith("/")) {
+            p = p.substring(0, p.length() - 1);
+        }
+        if (p.endsWith(".git")) {
+            p = p.substring(0, p.length() - 4);
+        }
+        while (p.endsWith("/")) {
+            p = p.substring(0, p.length() - 1);
+        }
+        return p;
     }
 
     /**
@@ -549,12 +784,13 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                                 continue;
                             }
                             
+                            boolean isDisabled = matchesExcludeBranches(branchName);
                             try {
                                 org.eclipse.jgit.revwalk.RevCommit commit = walk.parseCommit(ref.getObjectId());
                                 long commitTime = commit.getCommitTime() * 1000L;
-                                branchInfos.add(new BranchInfo(branchName, commitTime));
+                                branchInfos.add(new BranchInfo(branchName, commitTime, isDisabled));
                             } catch (Exception e) {
-                                branchInfos.add(new BranchInfo(branchName, 0L));
+                                branchInfos.add(new BranchInfo(branchName, 0L, isDisabled));
                             }
                         }
                     }
@@ -623,13 +859,14 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                                     continue;
                                 }
                                 
+                                boolean isDisabled = matchesExcludeBranches(branchName);
                                 try {
                                     org.eclipse.jgit.revwalk.RevCommit commit = walk.parseCommit(ref.getObjectId());
                                     long commitTime = commit.getCommitTime() * 1000L;
-                                    branchInfos.add(new BranchInfo(branchName, commitTime));
+                                    branchInfos.add(new BranchInfo(branchName, commitTime, isDisabled));
                                 } catch (Exception e) {
                                     // If we can't parse commit, treat as old
-                                    branchInfos.add(new BranchInfo(branchName, 0L));
+                                    branchInfos.add(new BranchInfo(branchName, 0L, isDisabled));
                                 }
                             }
                         }
@@ -689,9 +926,22 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             return false;
         }
         try {
-            Pattern pattern = Pattern.compile(alwaysIncludeBranches);
+            Pattern pattern = Pattern.compile(alwaysIncludeBranches.trim());
             return pattern.matcher(branchName).matches();
         } catch (PatternSyntaxException e) {
+            return false;
+        }
+    }
+
+    public boolean matchesExcludeBranches(String branchName) {
+        if (excludeBranches == null || excludeBranches.trim().isEmpty() || branchName == null || branchName.isEmpty()) {
+            return false;
+        }
+        try {
+            Pattern pattern = Pattern.compile(excludeBranches.trim());
+            return pattern.matcher(branchName).matches();
+        } catch (PatternSyntaxException e) {
+            LOGGER.warning("Invalid exclude branches regex: " + excludeBranches);
             return false;
         }
     }
@@ -756,10 +1006,16 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
     public static class BranchInfo {
         private final String name;
         private final long commitTime;
+        private final boolean disabled;
 
         public BranchInfo(String name, long commitTime) {
+            this(name, commitTime, false);
+        }
+
+        public BranchInfo(String name, long commitTime, boolean disabled) {
             this.name = name;
             this.commitTime = commitTime;
+            this.disabled = disabled;
         }
 
         public String getName() {
@@ -768,6 +1024,10 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
 
         public long getCommitTime() {
             return commitTime;
+        }
+
+        public boolean isDisabled() {
+            return disabled;
         }
     }
 
@@ -783,16 +1043,21 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         private final int maxBranchCount;
         private final String branchFilter;
         private final String alwaysIncludeBranches;
+        private final String excludeBranches;
         private final boolean useQuickFetch;
+        private final String subdirectory;
 
         CacheKey(String repositoryUrl, String credentialsId, int maxBranchCount,
-                 String branchFilter, String alwaysIncludeBranches, boolean useQuickFetch) {
+                 String branchFilter, String alwaysIncludeBranches, String excludeBranches,
+                 boolean useQuickFetch, String subdirectory) {
             this.repositoryUrl = repositoryUrl;
             this.credentialsId = credentialsId;
             this.maxBranchCount = maxBranchCount;
             this.branchFilter = branchFilter;
             this.alwaysIncludeBranches = alwaysIncludeBranches;
+            this.excludeBranches = excludeBranches;
             this.useQuickFetch = useQuickFetch;
+            this.subdirectory = subdirectory;
         }
 
         @Override
@@ -805,13 +1070,15 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                     && Objects.equals(repositoryUrl, other.repositoryUrl)
                     && Objects.equals(credentialsId, other.credentialsId)
                     && Objects.equals(branchFilter, other.branchFilter)
-                    && Objects.equals(alwaysIncludeBranches, other.alwaysIncludeBranches);
+                    && Objects.equals(alwaysIncludeBranches, other.alwaysIncludeBranches)
+                    && Objects.equals(excludeBranches, other.excludeBranches)
+                    && Objects.equals(subdirectory, other.subdirectory);
         }
 
         @Override
         public int hashCode() {
             return Objects.hash(repositoryUrl, credentialsId, maxBranchCount,
-                    branchFilter, alwaysIncludeBranches, useQuickFetch);
+                    branchFilter, alwaysIncludeBranches, excludeBranches, useQuickFetch, subdirectory);
         }
     }
 
@@ -913,6 +1180,21 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         }
 
         /**
+         * Validates the exclude branches regex.
+         */
+        public FormValidation doCheckExcludeBranches(@QueryParameter String value) {
+            if (value == null || value.trim().isEmpty()) {
+                return FormValidation.ok();
+            }
+            try {
+                Pattern.compile(value);
+            } catch (PatternSyntaxException e) {
+                return FormValidation.error("Invalid regex pattern: " + e.getMessage());
+            }
+            return FormValidation.ok();
+        }
+
+        /**
          * Fills the credentials dropdown.
          */
         public ListBoxModel doFillCredentialsIdItems(@AncestorInPath Item item,
@@ -954,7 +1236,9 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                                                      @QueryParameter String credentialsId,
                                                      @QueryParameter int maxBranchCount,
                                                      @QueryParameter String branchFilter,
-                                                     @QueryParameter String alwaysIncludeBranches) {
+                                                     @QueryParameter String alwaysIncludeBranches,
+                                                     @QueryParameter String excludeBranches,
+                                                     @QueryParameter String subdirectory) {
             ListBoxModel items = new ListBoxModel();
             
             if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
@@ -969,6 +1253,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             tempDef.setCredentialsId(credentialsId);
             tempDef.setBranchFilter(branchFilter);
             tempDef.setAlwaysIncludeBranches(alwaysIncludeBranches);
+            tempDef.setExcludeBranches(excludeBranches);
+            tempDef.setSubdirectory(subdirectory);
 
             try {
                 List<BranchInfo> branches = tempDef.fetchBranches();
@@ -976,7 +1262,11 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                     items.add("-- No branches found --", "");
                 } else {
                     for (BranchInfo branch : branches) {
-                        items.add(branch.getName(), branch.getName());
+                        if (branch.isDisabled()) {
+                            items.add(branch.getName() + " (disabled)", branch.getName());
+                        } else {
+                            items.add(branch.getName(), branch.getName());
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -994,7 +1284,9 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                                                @QueryParameter String credentialsId,
                                                @QueryParameter int maxBranchCount,
                                                @QueryParameter String branchFilter,
-                                               @QueryParameter String alwaysIncludeBranches) {
+                                               @QueryParameter String alwaysIncludeBranches,
+                                               @QueryParameter String excludeBranches,
+                                               @QueryParameter String subdirectory) {
             if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
                 return FormValidation.error("Repository URL is required");
             }
@@ -1005,6 +1297,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             tempDef.setCredentialsId(credentialsId);
             tempDef.setBranchFilter(branchFilter);
             tempDef.setAlwaysIncludeBranches(alwaysIncludeBranches);
+            tempDef.setExcludeBranches(excludeBranches);
+            tempDef.setSubdirectory(subdirectory);
 
             try {
                 // testConnection is invoked from the config page where no Job context

@@ -1,0 +1,18 @@
+<div>
+    A regular expression to disable or prohibit selection of specific branches (e.g. <code>(master|main)</code> or <code>release/.*</code>).
+    <p>
+        <b>Behavior:</b> Branches matching this pattern will still appear in the dropdown list for visibility, but will be <b>grayed out and disabled</b> (marked with <i>(disabled)</i>), preventing users from selecting them.
+    </p>
+    <p>
+        <b>Security:</b> If custom branch input is enabled, users cannot bypass this rule by manually typing a disabled branch name. Submissions matching this pattern will be rejected.
+    </p>
+    <p>
+        <b>Examples:</b>
+        <ul>
+            <li><code>master</code> - Disable the master branch</li>
+            <li><code>(master|main)</code> - Disable both master and main branches</li>
+            <li><code>release/.*</code> - Disable all release branches</li>
+            <li><code>deprecated-.*|archive/.*</code> - Disable deprecated or archived branches</li>
+        </ul>
+    </p>
+</div>
