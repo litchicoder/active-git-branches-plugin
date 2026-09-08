@@ -31,6 +31,7 @@ import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
 import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest2;
+import org.kohsuke.stapler.interceptor.RequirePOST;
 import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.transport.URIish;
 import org.eclipse.jgit.lib.Repository;
@@ -1117,6 +1118,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the repository URL.
          */
+        // lgtm[jenkins/no-permission-check] Performs only local string validation and returns no private data.
+        // lgtm[jenkins/csrf] Performs only local string validation and has no side effects.
         public FormValidation doCheckRepositoryUrl(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.error("Repository URL is required");
@@ -1131,6 +1134,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the max branch count.
          */
+        // lgtm[jenkins/no-permission-check] Performs only local numeric validation and returns no private data.
+        // lgtm[jenkins/csrf] Performs only local numeric validation and has no side effects.
         public FormValidation doCheckMaxBranchCount(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.error("Max branch count is required");
@@ -1152,6 +1157,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the branch filter regex.
          */
+        // lgtm[jenkins/no-permission-check] Performs only local regex validation and returns no private data.
+        // lgtm[jenkins/csrf] Performs only local regex validation and has no side effects.
         public FormValidation doCheckBranchFilter(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.ok();
@@ -1167,6 +1174,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the always include branches regex.
          */
+        // lgtm[jenkins/no-permission-check] Performs only local regex validation and returns no private data.
+        // lgtm[jenkins/csrf] Performs only local regex validation and has no side effects.
         public FormValidation doCheckAlwaysIncludeBranches(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.ok();
@@ -1182,6 +1191,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the exclude branches regex.
          */
+        // lgtm[jenkins/no-permission-check] Performs only local regex validation and returns no private data.
+        // lgtm[jenkins/csrf] Performs only local regex validation and has no side effects.
         public FormValidation doCheckExcludeBranches(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.ok();
@@ -1197,6 +1208,7 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Fills the credentials dropdown.
          */
+        // lgtm[jenkins/csrf] Credentials dropdown population is read-only; permission checks below prevent credentials enumeration.
         public ListBoxModel doFillCredentialsIdItems(@AncestorInPath Item item,
                                                       @QueryParameter String credentialsId,
                                                       @QueryParameter String repositoryUrl) {
@@ -1226,67 +1238,24 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
                     )
             );
 
-            return result;
-        }
-
-        /**
-         * Fills the branch dropdown for the parameter.
-         */
-        public ListBoxModel doFillDefaultValueItems(@QueryParameter String repositoryUrl,
-                                                     @QueryParameter String credentialsId,
-                                                     @QueryParameter int maxBranchCount,
-                                                     @QueryParameter String branchFilter,
-                                                     @QueryParameter String alwaysIncludeBranches,
-                                                     @QueryParameter String excludeBranches,
-                                                     @QueryParameter String subdirectory) {
-            ListBoxModel items = new ListBoxModel();
-            
-            if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
-                items.add("-- Configure repository URL first --", "");
-                return items;
-            }
-
-            // Create a temporary parameter definition to fetch branches
-            ActiveGitBranchesParameterDefinition tempDef = 
-                    new ActiveGitBranchesParameterDefinition("temp", repositoryUrl, 
-                            maxBranchCount > 0 ? maxBranchCount : 10, null);
-            tempDef.setCredentialsId(credentialsId);
-            tempDef.setBranchFilter(branchFilter);
-            tempDef.setAlwaysIncludeBranches(alwaysIncludeBranches);
-            tempDef.setExcludeBranches(excludeBranches);
-            tempDef.setSubdirectory(subdirectory);
-
-            try {
-                List<BranchInfo> branches = tempDef.fetchBranches();
-                if (branches.isEmpty()) {
-                    items.add("-- No branches found --", "");
-                } else {
-                    for (BranchInfo branch : branches) {
-                        if (branch.isDisabled()) {
-                            items.add(branch.getName() + " (disabled)", branch.getName());
-                        } else {
-                            items.add(branch.getName(), branch.getName());
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                LOGGER.log(Level.WARNING, "Failed to fetch branches", e);
-                items.add("-- Error fetching branches --", "");
-            }
-
-            return items;
+            return result.includeCurrentValue(credentialsId);
         }
 
         /**
          * Test connection to the repository.
          */
-        public FormValidation doTestConnection(@QueryParameter String repositoryUrl,
+        @RequirePOST
+        public FormValidation doTestConnection(@AncestorInPath Item item,
+                                               @QueryParameter String repositoryUrl,
                                                @QueryParameter String credentialsId,
                                                @QueryParameter int maxBranchCount,
                                                @QueryParameter String branchFilter,
                                                @QueryParameter String alwaysIncludeBranches,
                                                @QueryParameter String excludeBranches,
                                                @QueryParameter String subdirectory) {
+            if (!hasConfigurePermission(item)) {
+                return FormValidation.ok();
+            }
             if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
                 return FormValidation.error("Repository URL is required");
             }
@@ -1312,6 +1281,14 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
             } catch (Exception e) {
                 return FormValidation.error("Failed to connect: " + e.getMessage());
             }
+        }
+
+        private static boolean hasConfigurePermission(Item item) {
+            if (item != null) {
+                return item.hasPermission(Item.CONFIGURE);
+            }
+            Jenkins jenkins = Jenkins.getInstanceOrNull();
+            return jenkins != null && jenkins.hasPermission(Jenkins.ADMINISTER);
         }
     }
 }

@@ -5,6 +5,7 @@ import hudson.util.FormValidation;
 import net.sf.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.kohsuke.stapler.StaplerRequest2;
+import org.kohsuke.stapler.interceptor.RequirePOST;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -100,6 +101,35 @@ public class ActiveGitBranchesParameterDefinitionTest {
                 new ActiveGitBranchesParameterDefinition.DescriptorImpl();
         
         assertEquals("Active Git Branches Parameter", descriptor.getDisplayName());
+    }
+
+    @Test
+    public void testDefaultValueDoesNotUseRemoteFillMethod() throws Exception {
+        assertThrows(NoSuchMethodException.class, () ->
+                ActiveGitBranchesParameterDefinition.DescriptorImpl.class.getMethod(
+                        "doFillDefaultValueItems",
+                        String.class,
+                        String.class,
+                        int.class,
+                        String.class,
+                        String.class,
+                        String.class,
+                        String.class));
+    }
+
+    @Test
+    public void testTestConnectionRequiresPost() throws Exception {
+        assertNotNull(ActiveGitBranchesParameterDefinition.DescriptorImpl.class
+                .getMethod("doTestConnection",
+                        hudson.model.Item.class,
+                        String.class,
+                        String.class,
+                        int.class,
+                        String.class,
+                        String.class,
+                        String.class,
+                        String.class)
+                .getAnnotation(RequirePOST.class));
     }
 
     @Test
