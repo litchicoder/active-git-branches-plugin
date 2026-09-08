@@ -1,10 +1,8 @@
+# Auto-release is disabled until jenkinsci hosting + RPU CD secrets exist.
+# Re-add push/check_run triggers after MAVEN_USERNAME and MAVEN_TOKEN appear.
 name: CD
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
-      - main
 
 jobs:
   cd:
