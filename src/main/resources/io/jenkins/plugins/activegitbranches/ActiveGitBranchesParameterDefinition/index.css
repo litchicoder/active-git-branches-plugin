@@ -1,0 +1,28 @@
+.agb-disabled-option {
+    color: #999;
+    font-style: italic;
+}
+
+.agb-custom-wrapper {
+    margin-top: 6px;
+}
+
+.agb-custom-wrapper[hidden] {
+    display: none;
+}
+
+.agb-custom-hint {
+    color: #666;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.agb-cache-meta {
+    color: #888;
+    font-size: 11px;
+    margin-top: 3px;
+}
+
+.agb-refresh-warning {
+    color: #b08800;
+}
