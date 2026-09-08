@@ -485,12 +485,18 @@ public class ActiveGitBranchesParameterDefinitionTest {
                 "https://github.com/jenkinsci/jenkins.git",
                 10,
                 null
-        );
+        ) {
+            @Override
+            public java.util.List<ActiveGitBranchesParameterDefinition.BranchInfo> fetchBranches() {
+                return java.util.Collections.singletonList(
+                        new ActiveGitBranchesParameterDefinition.BranchInfo("develop", 1000L));
+            }
+        };
         param.setDefaultValue("feature/login");
         assertEquals("feature/login", param.getEffectiveDefaultValue());
 
         // When defaultValue is excluded, it should not return the excluded defaultValue
         param.setExcludeBranches("feature/.*");
-        assertNotEquals("feature/login", param.getEffectiveDefaultValue());
+        assertEquals("develop", param.getEffectiveDefaultValue());
     }
 }
