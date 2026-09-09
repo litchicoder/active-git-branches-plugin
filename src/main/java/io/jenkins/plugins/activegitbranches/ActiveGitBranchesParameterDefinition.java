@@ -1118,8 +1118,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the repository URL.
          */
-        // lgtm[jenkins/no-permission-check] Performs only local string validation and returns no private data.
-        // lgtm[jenkins/csrf] Performs only local string validation and has no side effects.
+        // Validates caller-supplied string input only; returns no private data and has no side effects.
+        @SuppressWarnings({"lgtm[jenkins/no-permission-check]", "lgtm[jenkins/csrf]"})
         public FormValidation doCheckRepositoryUrl(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.error("Repository URL is required");
@@ -1134,8 +1134,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the max branch count.
          */
-        // lgtm[jenkins/no-permission-check] Performs only local numeric validation and returns no private data.
-        // lgtm[jenkins/csrf] Performs only local numeric validation and has no side effects.
+        // Validates caller-supplied numeric input only; returns no private data and has no side effects.
+        @SuppressWarnings({"lgtm[jenkins/no-permission-check]", "lgtm[jenkins/csrf]"})
         public FormValidation doCheckMaxBranchCount(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.error("Max branch count is required");
@@ -1157,8 +1157,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the branch filter regex.
          */
-        // lgtm[jenkins/no-permission-check] Performs only local regex validation and returns no private data.
-        // lgtm[jenkins/csrf] Performs only local regex validation and has no side effects.
+        // Validates caller-supplied regex input only; returns no private data and has no side effects.
+        @SuppressWarnings({"lgtm[jenkins/no-permission-check]", "lgtm[jenkins/csrf]"})
         public FormValidation doCheckBranchFilter(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.ok();
@@ -1174,8 +1174,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the always include branches regex.
          */
-        // lgtm[jenkins/no-permission-check] Performs only local regex validation and returns no private data.
-        // lgtm[jenkins/csrf] Performs only local regex validation and has no side effects.
+        // Validates caller-supplied regex input only; returns no private data and has no side effects.
+        @SuppressWarnings({"lgtm[jenkins/no-permission-check]", "lgtm[jenkins/csrf]"})
         public FormValidation doCheckAlwaysIncludeBranches(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.ok();
@@ -1191,8 +1191,8 @@ public class ActiveGitBranchesParameterDefinition extends ParameterDefinition {
         /**
          * Validates the exclude branches regex.
          */
-        // lgtm[jenkins/no-permission-check] Performs only local regex validation and returns no private data.
-        // lgtm[jenkins/csrf] Performs only local regex validation and has no side effects.
+        // Validates caller-supplied regex input only; returns no private data and has no side effects.
+        @SuppressWarnings({"lgtm[jenkins/no-permission-check]", "lgtm[jenkins/csrf]"})
         public FormValidation doCheckExcludeBranches(@QueryParameter String value) {
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.ok();
