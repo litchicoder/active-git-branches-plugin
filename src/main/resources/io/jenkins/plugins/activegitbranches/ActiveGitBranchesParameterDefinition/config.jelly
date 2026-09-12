@@ -44,7 +44,7 @@
 
     <f:advanced>
         <f:entry title="${%Subdirectory}" field="subdirectory">
-            <f:textbox placeholder="Auto-detected if blank (e.g. GlazeroAppAndroid)" />
+            <f:textbox placeholder="Auto-detected if blank (e.g. backend)" />
         </f:entry>
     </f:advanced>
 

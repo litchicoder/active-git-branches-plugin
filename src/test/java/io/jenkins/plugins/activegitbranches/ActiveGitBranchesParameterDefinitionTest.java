@@ -259,8 +259,8 @@ public class ActiveGitBranchesParameterDefinitionTest {
         );
 
         assertNull(param.getSubdirectory());
-        param.setSubdirectory("GlazeroAppAndroid");
-        assertEquals("GlazeroAppAndroid", param.getSubdirectory());
+        param.setSubdirectory("backend");
+        assertEquals("backend", param.getSubdirectory());
     }
 
     @Test
@@ -291,7 +291,7 @@ public class ActiveGitBranchesParameterDefinitionTest {
 
         // Different repos should fail
         assertFalse(ActiveGitBranchesParameterDefinition.isSameGitUrl(
-                "https://github.com/org/GlazeroAppAndroid.git", "https://github.com/org/GlazeroAppRN.git"));
+                "https://github.com/org/backend.git", "https://github.com/org/frontend.git"));
 
         // Different hosts should fail
         assertFalse(ActiveGitBranchesParameterDefinition.isSameGitUrl(
@@ -306,43 +306,43 @@ public class ActiveGitBranchesParameterDefinitionTest {
     public void testFindGitWorkspaceSubdirectory() throws Exception {
         java.io.File tempRoot = java.nio.file.Files.createTempDirectory("jenkins-ws-test-").toFile();
         try {
-            // Create GlazeroAppAndroid subdirectory with .git/config
-            java.io.File androidDir = new java.io.File(tempRoot, "GlazeroAppAndroid");
-            java.io.File androidGit = new java.io.File(androidDir, ".git");
-            androidGit.mkdirs();
-            java.nio.file.Files.write(new java.io.File(androidGit, "config").toPath(),
-                    "[remote \"origin\"]\n\turl = git@github.com:org/GlazeroAppAndroid.git\n".getBytes());
+            // Create backend subdirectory with .git/config
+            java.io.File backendDir = new java.io.File(tempRoot, "backend");
+            java.io.File backendGit = new java.io.File(backendDir, ".git");
+            backendGit.mkdirs();
+            java.nio.file.Files.write(new java.io.File(backendGit, "config").toPath(),
+                    "[remote \"origin\"]\n\turl = git@github.com:org/backend.git\n".getBytes());
 
-            // Create GlazeroAppRN subdirectory with .git/config
-            java.io.File rnDir = new java.io.File(tempRoot, "GlazeroAppRN");
-            java.io.File rnGit = new java.io.File(rnDir, ".git");
-            rnGit.mkdirs();
-            java.nio.file.Files.write(new java.io.File(rnGit, "config").toPath(),
-                    "[remote \"origin\"]\n\turl = git@github.com:org/GlazeroAppRN.git\n".getBytes());
+            // Create frontend subdirectory with .git/config
+            java.io.File frontendDir = new java.io.File(tempRoot, "frontend");
+            java.io.File frontendGit = new java.io.File(frontendDir, ".git");
+            frontendGit.mkdirs();
+            java.nio.file.Files.write(new java.io.File(frontendGit, "config").toPath(),
+                    "[remote \"origin\"]\n\turl = git@github.com:org/frontend.git\n".getBytes());
 
             hudson.FilePath ws = new hudson.FilePath(tempRoot);
 
-            // Test 1: Auto-detection for Android repo
-            ActiveGitBranchesParameterDefinition paramAndroid = new ActiveGitBranchesParameterDefinition(
-                    "BRANCH", "https://github.com/org/GlazeroAppAndroid.git", 10, null);
-            hudson.FilePath foundAndroid = paramAndroid.findGitWorkspace(ws);
-            assertNotNull(foundAndroid);
-            assertEquals("GlazeroAppAndroid", foundAndroid.getName());
+            // Test 1: Auto-detection for backend repo
+            ActiveGitBranchesParameterDefinition paramBackend = new ActiveGitBranchesParameterDefinition(
+                    "BRANCH", "https://github.com/org/backend.git", 10, null);
+            hudson.FilePath foundBackend = paramBackend.findGitWorkspace(ws);
+            assertNotNull(foundBackend);
+            assertEquals("backend", foundBackend.getName());
 
-            // Test 2: Auto-detection for RN repo
-            ActiveGitBranchesParameterDefinition paramRN = new ActiveGitBranchesParameterDefinition(
-                    "BRANCH", "https://github.com/org/GlazeroAppRN.git", 10, null);
-            hudson.FilePath foundRN = paramRN.findGitWorkspace(ws);
-            assertNotNull(foundRN);
-            assertEquals("GlazeroAppRN", foundRN.getName());
+            // Test 2: Auto-detection for frontend repo
+            ActiveGitBranchesParameterDefinition paramFrontend = new ActiveGitBranchesParameterDefinition(
+                    "BRANCH", "https://github.com/org/frontend.git", 10, null);
+            hudson.FilePath foundFrontend = paramFrontend.findGitWorkspace(ws);
+            assertNotNull(foundFrontend);
+            assertEquals("frontend", foundFrontend.getName());
 
             // Test 3: Manual subdirectory override
             ActiveGitBranchesParameterDefinition paramManual = new ActiveGitBranchesParameterDefinition(
-                    "BRANCH", "https://github.com/org/GlazeroAppRN.git", 10, null);
-            paramManual.setSubdirectory("GlazeroAppRN");
+                    "BRANCH", "https://github.com/org/frontend.git", 10, null);
+            paramManual.setSubdirectory("frontend");
             hudson.FilePath foundManual = paramManual.findGitWorkspace(ws);
             assertNotNull(foundManual);
-            assertEquals("GlazeroAppRN", foundManual.getName());
+            assertEquals("frontend", foundManual.getName());
 
             // Test 4: Unknown repo returns null
             ActiveGitBranchesParameterDefinition paramUnknown = new ActiveGitBranchesParameterDefinition(

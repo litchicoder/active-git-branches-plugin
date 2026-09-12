@@ -9,7 +9,7 @@ A Jenkins plugin that provides a build parameter for selecting Git branches dyna
 - **Configurable Limit**: Limit the number of displayed branches (Top N)
 - **Regex Filtering**: Filter branches using regular expressions
 - **Credentials Support**: Integrates with Jenkins Credentials for private repositories
-- **Subdirectory / Multi-Repo Support**: Automatically detects Git repositories inside 1-level subdirectories (e.g. `workspace/GlazeroAppAndroid`), with optional manual `subdirectory` override
+- **Subdirectory / Multi-Repo Support**: Automatically detects Git repositories inside 1-level subdirectories (e.g. `workspace/backend`), with optional manual `subdirectory` override
 - **No Script Approval Required**: Pure Java implementation, no Groovy scripts or sandbox approval needed
 
 ## Requirements
